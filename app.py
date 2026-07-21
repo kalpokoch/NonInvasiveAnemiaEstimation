@@ -32,6 +32,33 @@ PATIENT_IMAGE_EXTENSIONS = (".jpeg", ".jpg", ".png", ".JPEG", ".JPG", ".PNG")
 
 st.set_page_config(page_title="Hb / Anemia Predictor", page_icon="🩸", layout="wide")
 
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 2.5rem;
+        padding-bottom: 4rem;
+        max-width: 1280px;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 12px;
+    }
+    div[data-testid="stFileUploaderDropzone"] {
+        border-radius: 10px;
+    }
+    .stButton > button {
+        border-radius: 8px;
+        padding: 0.55rem 1rem;
+    }
+    h2, h3 {
+        margin-top: 1.75rem;
+        margin-bottom: 0.5rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 def list_patients():
     if not os.path.isdir(PATIENTS_DIR):
@@ -126,7 +153,7 @@ st.subheader("1. Upload photos")
 patients = list_patients()
 if patients:
     st.caption("Click a sample patient to load their photos, then untick any you don't want to use. Uploading your own photo for a modality below always overrides the sample.")
-    p_cols = st.columns(len(patients) + 1)
+    p_cols = st.columns(len(patients) + 1, gap="small")
     for p_col, name in zip(p_cols, patients):
         if p_col.button(name, key=f"patient_btn_{name}", use_container_width=True):
             st.session_state["selected_patient"] = name
@@ -138,10 +165,11 @@ if patients:
 selected_patient = st.session_state.get("selected_patient")
 patient_use_flags = {}
 if selected_patient:
+    st.write("")
     st.markdown(f"**Loaded sample: {selected_patient}**")
-    pat_cols = st.columns(4)
+    pat_cols = st.columns(4, gap="medium")
     for pat_col, key in zip(pat_cols, IMAGE_MODALITY_KEYS):
-        with pat_col:
+        with pat_col, st.container(border=True):
             st.markdown(f"**{MODALITY_LABELS[key]}**")
             path = find_patient_modality_path(selected_patient, key)
             if path is not None:
@@ -154,11 +182,12 @@ if selected_patient:
     st.divider()
 
 st.caption("Upload as many modalities as you have. Missing ones are handled via the model's fusion mechanism, but more photos generally give a more reliable prediction.")
+st.write("")
 
-cols = st.columns(4)
+cols = st.columns(4, gap="medium")
 manual_images = {}
 for col, key in zip(cols, IMAGE_MODALITY_KEYS):
-    with col:
+    with col, st.container(border=True):
         st.markdown(f"**{MODALITY_LABELS[key]}**")
         file = st.file_uploader(f"upload_{key}", type=["jpg", "jpeg", "png"], key=f"upload_{key}", label_visibility="collapsed")
         if file is not None:
@@ -197,7 +226,7 @@ if any_uploaded and yolo_models:
 
         if detections:
             st.markdown("**Detected region**")
-            row1_cols = st.columns(4)
+            row1_cols = st.columns(4, gap="medium")
             for col, key in zip(row1_cols, IMAGE_MODALITY_KEYS):
                 if key not in detections:
                     continue
@@ -214,7 +243,7 @@ if any_uploaded and yolo_models:
                         st.caption(f"Confidence {conf:.2f}")
 
             st.markdown("**Cropped region actually fed to the model**")
-            row2_cols = st.columns(4)
+            row2_cols = st.columns(4, gap="medium")
             for col, key in zip(row2_cols, IMAGE_MODALITY_KEYS):
                 if key not in detections:
                     continue
@@ -229,8 +258,9 @@ if any_uploaded and yolo_models:
                         cropped = crop_to_box(img, padded_box)
                         st.image(make_thumbnail(cropped), use_container_width=True)
 
+st.divider()
 st.subheader("2. Demographics")
-d1, d2, d3, d4, d5, d6 = st.columns(6)
+d1, d2, d3, d4, d5, d6 = st.columns(6, gap="medium")
 age = d1.number_input("Age (years)", min_value=0, max_value=120, value=30)
 weight_kg = d2.number_input("Weight (kg)", min_value=1.0, max_value=250.0, value=60.0)
 height_cm = d3.number_input("Height (cm)", min_value=30.0, max_value=230.0, value=160.0)
@@ -245,6 +275,7 @@ gender_label = d6.selectbox("Gender", gender_options)
 
 n_uploaded = sum(1 for v in uploaded_images.values() if v is not None)
 
+st.divider()
 st.subheader("3. Predict")
 predict_clicked = st.button("Run prediction", type="primary", disabled=(n_uploaded == 0))
 if n_uploaded == 0:
@@ -280,8 +311,9 @@ if "last_prediction" in st.session_state:
     hb = result["hb_pred"]
     hb_std = result["hb_pred_std"]
 
+    st.divider()
     st.markdown("### Result")
-    m1, m2 = st.columns(2)
+    m1, m2 = st.columns(2, gap="medium")
     m1.metric("Predicted Hemoglobin", f"{hb:.2f} g/dL", help="Fused via inverse-variance weighting across present modalities.")
     m2.metric("Approx. 95% interval", f"{hb - 1.96 * hb_std:.2f} – {hb + 1.96 * hb_std:.2f} g/dL")
 
@@ -316,7 +348,7 @@ if "last_prediction" in st.session_state:
             "Warm colors (red/yellow) mark regions of the shared Swin-T backbone's last feature map that most "
             "increased that modality's own hemoglobin estimate. Computed per-modality (no TTA), not per fused result."
         )
-        gc_cols = st.columns(4)
+        gc_cols = st.columns(4, gap="medium")
         for gc_col, key in zip(gc_cols, IMAGE_MODALITY_KEYS):
             with gc_col:
                 if key in overlays:
