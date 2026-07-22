@@ -11,6 +11,7 @@ detected box for illustration without changing what's actually fed to the model.
 
 import os
 
+import cv2
 import numpy as np
 from PIL import ImageDraw
 from ultralytics import YOLO
@@ -43,7 +44,12 @@ def detect_box(model, pil_img, conf=0.25):
     """Runs detection and returns (x1, y1, x2, y2, confidence) of the highest-
     confidence box, or None if nothing was detected or anything went wrong."""
     try:
-        results = model.predict(np.asarray(pil_img.convert("RGB")), conf=conf, verbose=False)
+        # ultralytics treats raw ndarray input as BGR (the cv2.imread/file-path
+        # convention), so an RGB array must be flipped here or every detector
+        # sees color-swapped pixels and confidence collapses.
+        rgb = np.asarray(pil_img.convert("RGB"))
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        results = model.predict(bgr, conf=conf, verbose=False)
     except Exception:
         return None
 
