@@ -12,7 +12,7 @@ from segmentation import detect_box, draw_box, load_yolo_models, pad_box, crop_t
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FIXED_CHECKPOINT_PATH = os.path.join(APP_DIR, "model_checkpoint", "hb_model_sensorfusion_v1_512_best.pth")
-USE_TTA = True
+USE_TTA = False
 
 MODALITY_LABELS = {
     "eyelid": "Lower eyelid",
