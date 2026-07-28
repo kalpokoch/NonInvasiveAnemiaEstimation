@@ -1,6 +1,7 @@
 import os
 
 import streamlit as st
+import streamlit.components.v1 as components
 import torch
 from PIL import Image, ImageOps
 
@@ -30,7 +31,58 @@ PATIENT_MODALITY_STEMS = {
 }
 PATIENT_IMAGE_EXTENSIONS = (".jpeg", ".jpg", ".png", ".JPEG", ".JPG", ".PNG")
 
-st.set_page_config(page_title="Hb / Anemia Predictor", page_icon="🩸", layout="wide")
+SEO_TITLE = "HemFinder | AI-Based Hemoglobin Estimation"
+SEO_DESCRIPTION = (
+    "HemFinder is an AI-based research application for estimating hemoglobin levels "
+    "using lower-eyelid images, palm images, and basic clinical information. "
+    "Research proof-of-concept only, not a replacement for laboratory blood testing."
+)
+SEO_KEYWORDS = (
+    "hemoglobin estimation, anemia detection, non-invasive hemoglobin, "
+    "AI hemoglobin predictor, eyelid conjunctiva anemia, palm pallor anemia, "
+    "hemoglobin AI, HemFinder"
+)
+
+st.set_page_config(page_title=SEO_TITLE, page_icon="🩸", layout="wide")
+
+# st.markdown's HTML is inserted via innerHTML, so <script> tags in it never run.
+# components.html renders in a real iframe (scripts do execute there), and from
+# inside it window.parent.document is the actual top-level page document/<head>.
+components.html(
+    f"""
+    <script>
+    (function() {{
+        const head = window.parent.document.head;
+        const metaTags = [
+            {{name: "description", content: {SEO_DESCRIPTION!r}}},
+            {{name: "keywords", content: {SEO_KEYWORDS!r}}},
+            {{name: "robots", content: "index, follow"}},
+            {{name: "author", content: "HemFinder"}},
+            {{property: "og:type", content: "website"}},
+            {{property: "og:title", content: {SEO_TITLE!r}}},
+            {{property: "og:description", content: {SEO_DESCRIPTION!r}}},
+            {{name: "twitter:card", content: "summary"}},
+            {{name: "twitter:title", content: {SEO_TITLE!r}}},
+            {{name: "twitter:description", content: {SEO_DESCRIPTION!r}}},
+        ];
+        metaTags.forEach(function(spec) {{
+            const selector = spec.name
+                ? `meta[name="${{spec.name}}"]`
+                : `meta[property="${{spec.property}}"]`;
+            let tag = head.querySelector(selector);
+            if (!tag) {{
+                tag = window.parent.document.createElement("meta");
+                if (spec.name) tag.setAttribute("name", spec.name);
+                if (spec.property) tag.setAttribute("property", spec.property);
+                head.appendChild(tag);
+            }}
+            tag.setAttribute("content", spec.content);
+        }});
+    }})();
+    </script>
+    """,
+    height=0,
+)
 
 st.markdown(
     """
@@ -111,10 +163,17 @@ def get_yolo_models(device_str):
     return load_yolo_models(device_str)
 
 
-st.title("🩸 Hemoglobin / Anemia Predictor")
+st.header("HemFinder: AI-Based Non-Invasive Hemoglobin Estimation")
+
+st.text(
+    "HemFinder is an AI-based research application for estimating "
+    "hemoglobin levels using lower-eyelid images, palm images, "
+    "and basic clinical information."
+)
+
 st.caption(
-    "Multimodal Swin-T sensor-fusion model (eyelid / tongue / palm / fingertips photos + demographics) "
-    "predicting hemoglobin (g/dL). Research prototype — not a medical device."
+    "Research proof-of-concept only. HemFinder is not a replacement "
+    "for laboratory blood testing or professional medical diagnosis."
 )
 
 encoding_map = get_encoding_map()
