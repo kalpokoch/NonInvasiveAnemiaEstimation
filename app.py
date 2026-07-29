@@ -42,6 +42,7 @@ SEO_KEYWORDS = (
     "AI hemoglobin predictor, eyelid conjunctiva anemia, palm pallor anemia, "
     "hemoglobin AI, HemFinder"
 )
+GOOGLE_SITE_VERIFICATION = "-O14PT_UF-ewNYH-qNEfCoixx5IUR1A31QAx5YhTO7Q"
 
 st.set_page_config(page_title=SEO_TITLE, page_icon="🩸", layout="wide")
 
@@ -54,6 +55,7 @@ components.html(
     (function() {{
         const head = window.parent.document.head;
         const metaTags = [
+            {{name: "google-site-verification", content: {GOOGLE_SITE_VERIFICATION!r}}},
             {{name: "description", content: {SEO_DESCRIPTION!r}}},
             {{name: "keywords", content: {SEO_KEYWORDS!r}}},
             {{name: "robots", content: "index, follow"}},
