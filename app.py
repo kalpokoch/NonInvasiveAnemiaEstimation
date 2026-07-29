@@ -1,7 +1,6 @@
 import os
 
 import streamlit as st
-import streamlit.components.v1 as components
 import torch
 from PIL import Image, ImageOps
 
@@ -44,47 +43,48 @@ SEO_KEYWORDS = (
 )
 GOOGLE_SITE_VERIFICATION = "-O14PT_UF-ewNYH-qNEfCoixx5IUR1A31QAx5YhTO7Q"
 
-st.set_page_config(page_title=SEO_TITLE, page_icon="🩸", layout="wide")
 
-# st.markdown's HTML is inserted via innerHTML, so <script> tags in it never run.
-# components.html renders in a real iframe (scripts do execute there), and from
-# inside it window.parent.document is the actual top-level page document/<head>.
-components.html(
-    f"""
-    <script>
-    (function() {{
-        const head = window.parent.document.head;
-        const metaTags = [
-            {{name: "google-site-verification", content: {GOOGLE_SITE_VERIFICATION!r}}},
-            {{name: "description", content: {SEO_DESCRIPTION!r}}},
-            {{name: "keywords", content: {SEO_KEYWORDS!r}}},
-            {{name: "robots", content: "index, follow"}},
-            {{name: "author", content: "HemFinder"}},
-            {{property: "og:type", content: "website"}},
-            {{property: "og:title", content: {SEO_TITLE!r}}},
-            {{property: "og:description", content: {SEO_DESCRIPTION!r}}},
-            {{name: "twitter:card", content: "summary"}},
-            {{name: "twitter:title", content: {SEO_TITLE!r}}},
-            {{name: "twitter:description", content: {SEO_DESCRIPTION!r}}},
-        ];
-        metaTags.forEach(function(spec) {{
-            const selector = spec.name
-                ? `meta[name="${{spec.name}}"]`
-                : `meta[property="${{spec.property}}"]`;
-            let tag = head.querySelector(selector);
-            if (!tag) {{
-                tag = window.parent.document.createElement("meta");
-                if (spec.name) tag.setAttribute("name", spec.name);
-                if (spec.property) tag.setAttribute("property", spec.property);
-                head.appendChild(tag);
-            }}
-            tag.setAttribute("content", spec.content);
-        }});
-    }})();
-    </script>
-    """,
-    height=0,
-)
+def _patch_index_html_head():
+    """Streamlit serves its own bundled index.html directly, before any of our
+    Python/JS runs, for the first HTTP GET of the page -- so client-side head
+    injection is invisible to anything that fetches raw HTML without executing
+    JS (search-engine verifiers, some crawlers, link-preview bots). Patch real
+    <meta> tags straight into that static file on disk once per container so
+    they're present from the very first byte served."""
+    marker = "<!-- hemfinder-seo-tags -->"
+    index_path = os.path.join(os.path.dirname(st.__file__), "static", "index.html")
+    try:
+        with open(index_path, "r", encoding="utf-8") as f:
+            html = f.read()
+    except OSError:
+        return
+    if marker in html:
+        return
+    tags = "\n".join([
+        marker,
+        f'<meta name="google-site-verification" content="{GOOGLE_SITE_VERIFICATION}">',
+        f'<meta name="description" content="{SEO_DESCRIPTION}">',
+        f'<meta name="keywords" content="{SEO_KEYWORDS}">',
+        '<meta name="robots" content="index, follow">',
+        '<meta name="author" content="HemFinder">',
+        '<meta property="og:type" content="website">',
+        f'<meta property="og:title" content="{SEO_TITLE}">',
+        f'<meta property="og:description" content="{SEO_DESCRIPTION}">',
+        '<meta name="twitter:card" content="summary">',
+        f'<meta name="twitter:title" content="{SEO_TITLE}">',
+        f'<meta name="twitter:description" content="{SEO_DESCRIPTION}">',
+    ])
+    patched = html.replace("</head>", tags + "\n</head>", 1)
+    try:
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(patched)
+    except OSError:
+        pass
+
+
+_patch_index_html_head()
+
+st.set_page_config(page_title=SEO_TITLE, page_icon="🩸", layout="wide")
 
 st.markdown(
     """
