@@ -185,8 +185,9 @@ def render_result_card(title, result, overlays, show_gradcam, modality_keys):
     # WHO-ish anemia thresholds are gender/age dependent; show a rough flag only.
     if hb < LAB_TEST_SUGGESTION_THRESHOLD:
         st.error(
-            f"Predicted Hb is below {LAB_TEST_SUGGESTION_THRESHOLD:.0f} g/dL, an abnormal reading. "
-            "This app is a research prototype, not a diagnosis — please get a laboratory blood test to confirm."
+            f"**Abnormal result (below {LAB_TEST_SUGGESTION_THRESHOLD:.0f} g/dL).** "
+            "**We recommend a laboratory blood test to confirm this reading.** "
+            "This app is a research prototype and cannot substitute for a clinical diagnosis."
         )
     elif hb < 11.0:
         st.error("Predicted Hb is below 11 g/dL — commonly used as a rough anemia threshold. This is a research model, not a diagnosis.")
