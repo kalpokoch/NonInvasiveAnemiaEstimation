@@ -14,9 +14,15 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 FIXED_CHECKPOINT_PATH = os.path.join(APP_DIR, "model_checkpoint", "hb_model_sensorfusion_v1_512_best.pth")
 USE_TTA = False
 
+# Tongue is deliberately excluded from the app UI/flow (never uploaded, so its
+# presence flag stays 0 and fusion excludes it automatically) even though the
+# trained checkpoint still physically has a tongue head -- that's baked into
+# the architecture and can't be removed without retraining.
+STAGE1_KEYS = ["eyelid"]
+STAGE2_KEYS = ["palm", "fingertips"]
+
 MODALITY_LABELS = {
     "eyelid": "Lower eyelid",
-    "tongue": "Tongue (underside/back)",
     "palm": "Palm",
     "fingertips": "Fingertips",
 }
@@ -24,7 +30,6 @@ MODALITY_LABELS = {
 PATIENTS_DIR = os.path.join(APP_DIR, "Patients")
 PATIENT_MODALITY_STEMS = {
     "eyelid": "Lowereyelid",
-    "tongue": "Tongueback",
     "palm": "Palm",
     "fingertips": "Fingertip",
 }
@@ -150,6 +155,116 @@ def load_patient_thumbnail(path, size=(320, 320)):
     return make_thumbnail(open_image_corrected(path), size)
 
 
+def run_prediction(images, demographics, model, ckpt, device_str, yolo_models, use_tta, want_gradcam):
+    batch, presence, display_images = build_batch(
+        images, demographics, ckpt, device=device_str, yolo_models=yolo_models
+    )
+    result = predict(model, batch, presence, ckpt, use_tta=use_tta)
+    overlays = {}
+    if want_gradcam:
+        overlays = compute_gradcam_overlays(model, batch, presence, display_images, IMAGE_MODALITY_KEYS)
+    return result, overlays
+
+
+def render_result_card(title, result, overlays, show_gradcam, modality_keys):
+    hb = result["hb_pred"]
+    hb_std = result["hb_pred_std"]
+
+    st.markdown(f"#### {title}")
+    m1, m2 = st.columns(2, gap="medium")
+    m1.metric(
+        "Predicted Hemoglobin", f"{hb:.2f} g/dL",
+        help="Fused via inverse-variance weighting across present modalities.",
+    )
+    m2.metric("Approx. 95% interval", f"{hb - 1.96 * hb_std:.2f} – {hb + 1.96 * hb_std:.2f} g/dL")
+
+    # WHO-ish anemia thresholds are gender/age dependent; show a rough flag only.
+    if hb < 11.0:
+        st.error("Predicted Hb is below 11 g/dL — commonly used as a rough anemia threshold. This is a research model, not a diagnosis.")
+    elif hb < 12.5:
+        st.warning("Predicted Hb is in a borderline-low range.")
+    else:
+        st.success("Predicted Hb is in a typical non-anemic range.")
+
+    with st.expander("Per-modality breakdown"):
+        rows = [
+            {
+                "modality": key,
+                "present": info["present"],
+                "hb_pred (g/dL)": round(info["hb_pred"], 2) if info["present"] else "—",
+                "hb_std (g/dL)": round(info["hb_std"], 2) if info["present"] else "—",
+            }
+            for key, info in result["per_modality"].items()
+            if key in modality_keys or key == "tabular"
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.caption(
+            "Lower std = the model is more confident in that modality's own estimate; the fused prediction "
+            "weights each present modality by its inverse variance."
+        )
+
+    present_overlay_keys = [k for k in modality_keys if k in overlays] if show_gradcam else []
+    if present_overlay_keys:
+        st.markdown("**Grad-CAM**")
+        st.caption(
+            "Warm colors (red/yellow) mark regions of the shared Swin-T backbone's last feature map that "
+            "most increased that modality's own hemoglobin estimate."
+        )
+        gc_cols = st.columns(len(present_overlay_keys), gap="medium")
+        for gc_col, key in zip(gc_cols, present_overlay_keys):
+            with gc_col:
+                st.markdown(f"**{MODALITY_LABELS[key]}**")
+                st.image(overlays[key], use_container_width=True)
+
+
+def render_roi_debug_expander(images_subset, yolo_models):
+    present = {k: v for k, v in images_subset.items() if v is not None}
+    if not present or not yolo_models:
+        return
+    with st.expander("🔍 Show ROI detector output (optional, for demonstration)"):
+        st.caption(
+            "For eyelid/palm, a YOLOv8 model auto-detects and crops to the relevant region before "
+            "prediction (fingertips has no detector and always uses the fixed crop). This is purely "
+            "illustrative and doesn't change the prediction itself."
+        )
+        detections = {}
+        for key, img in present.items():
+            yolo_model = yolo_models.get(key)
+            if yolo_model is None:
+                continue
+            detections[key] = (img, detect_box(yolo_model, img))
+        if not detections:
+            st.caption("No ROI detector available for the uploaded photo(s).")
+            return
+
+        st.markdown("**Detected region**")
+        row1_cols = st.columns(len(detections), gap="medium")
+        for col, (key, (img, detection)) in zip(row1_cols, detections.items()):
+            with col:
+                st.caption(MODALITY_LABELS[key])
+                if detection is None:
+                    st.image(make_thumbnail(img), use_container_width=True)
+                    st.caption("No detection — raw photo used as-is.")
+                else:
+                    x1, y1, x2, y2, conf = detection
+                    boxed = draw_box(img, (x1, y1, x2, y2))
+                    st.image(make_thumbnail(boxed), use_container_width=True)
+                    st.caption(f"Confidence {conf:.2f}")
+
+        st.markdown("**Cropped region actually fed to the model**")
+        row2_cols = st.columns(len(detections), gap="medium")
+        for col, (key, (img, detection)) in zip(row2_cols, detections.items()):
+            with col:
+                st.caption(MODALITY_LABELS[key])
+                if detection is None:
+                    st.caption("N/A (raw photo used)")
+                else:
+                    x1, y1, x2, y2, conf = detection
+                    padded_box = pad_box((x1, y1, x2, y2), img.size)
+                    cropped = crop_to_box(img, padded_box)
+                    st.image(make_thumbnail(cropped), use_container_width=True)
+
+
 @st.cache_resource(show_spinner="Loading model checkpoint...")
 def get_model(checkpoint_path, device_str):
     return load_model_and_checkpoint(checkpoint_path, device=device_str)
@@ -209,115 +324,57 @@ with st.sidebar:
 model, ckpt = get_model(checkpoint_path, device_str)
 yolo_models = get_yolo_models(device_str)
 
-st.subheader("1. Upload photos")
+st.subheader("1. Upload an eyelid photo")
+st.caption(
+    "Gently pull down the lower eyelid to expose the inner conjunctiva and photograph it in good "
+    "light. This one photo is enough for an initial estimate — you can add more photos afterward "
+    "if you want a more robust result."
+)
 
 patients = list_patients()
 if patients:
-    st.caption("Click a sample patient to load their photos, then untick any you don't want to use. Uploading your own photo for a modality below always overrides the sample.")
+    st.caption("Or click a sample patient to try the app with example photos.")
     p_cols = st.columns(len(patients) + 1, gap="small")
     for p_col, name in zip(p_cols, patients):
         if p_col.button(name, key=f"patient_btn_{name}", use_container_width=True):
             st.session_state["selected_patient"] = name
-            st.session_state.pop("last_prediction", None)
+            st.session_state.pop("eyelid_result", None)
+            st.session_state.pop("combined_result", None)
     if p_cols[-1].button("Clear sample", key="clear_patient_btn", use_container_width=True):
         st.session_state["selected_patient"] = None
-        st.session_state.pop("last_prediction", None)
+        st.session_state.pop("eyelid_result", None)
+        st.session_state.pop("combined_result", None)
 
 selected_patient = st.session_state.get("selected_patient")
-patient_use_flags = {}
-if selected_patient:
-    st.write("")
-    st.markdown(f"**Loaded sample: {selected_patient}**")
-    pat_cols = st.columns(4, gap="medium")
-    for pat_col, key in zip(pat_cols, IMAGE_MODALITY_KEYS):
-        with pat_col, st.container(border=True):
-            st.markdown(f"**{MODALITY_LABELS[key]}**")
-            path = find_patient_modality_path(selected_patient, key)
-            if path is not None:
-                st.image(load_patient_thumbnail(path), use_container_width=True)
-                patient_use_flags[key] = st.checkbox(
-                    "Use this photo", value=True, key=f"use_patient_{selected_patient}_{key}"
-                )
-            else:
-                st.caption("Not available for this patient.")
-    st.divider()
+sample_eyelid_path = find_patient_modality_path(selected_patient, "eyelid") if selected_patient else None
 
-st.caption("Upload as many modalities as you have. Missing ones are handled via the model's fusion mechanism, but more photos generally give a more reliable prediction.")
-st.write("")
+eyelid_card_col = st.columns(4, gap="medium")[0]
+with eyelid_card_col, st.container(border=True):
+    st.markdown(f"**{MODALITY_LABELS['eyelid']}**")
+    eyelid_file = st.file_uploader(
+        "upload_eyelid", type=["jpg", "jpeg", "png"], key="upload_eyelid", label_visibility="collapsed"
+    )
+    manual_eyelid_img = open_image_corrected(eyelid_file) if eyelid_file is not None else None
 
-cols = st.columns(4, gap="medium")
-manual_images = {}
-for col, key in zip(cols, IMAGE_MODALITY_KEYS):
-    with col, st.container(border=True):
-        st.markdown(f"**{MODALITY_LABELS[key]}**")
-        file = st.file_uploader(f"upload_{key}", type=["jpg", "jpeg", "png"], key=f"upload_{key}", label_visibility="collapsed")
-        if file is not None:
-            img = open_image_corrected(file)
-            st.image(img, use_container_width=True)
-            manual_images[key] = img
-        else:
-            manual_images[key] = None
-
-# Manual upload always overrides the loaded sample patient for that modality.
-uploaded_images = {}
-for key in IMAGE_MODALITY_KEYS:
-    if manual_images[key] is not None:
-        uploaded_images[key] = manual_images[key]
-    elif selected_patient and patient_use_flags.get(key):
-        path = find_patient_modality_path(selected_patient, key)
-        uploaded_images[key] = open_image_corrected(path) if path else None
-    else:
-        uploaded_images[key] = None
-
-any_uploaded = any(v is not None for v in uploaded_images.values())
-if any_uploaded and yolo_models:
-    with st.expander("🔍 Show ROI detector output (optional, for demonstration)"):
-        st.caption(
-            "For eyelid/tongue/palm, a YOLOv8 model auto-detects and crops to the relevant region before "
-            "prediction (fingertips has no detector and always uses the fixed crop). This is purely "
-            "illustrative and doesn't change the prediction itself."
+    use_sample_eyelid = False
+    if manual_eyelid_img is not None:
+        st.image(manual_eyelid_img, use_container_width=True)
+    elif sample_eyelid_path is not None:
+        st.image(load_patient_thumbnail(sample_eyelid_path), use_container_width=True)
+        use_sample_eyelid = st.checkbox(
+            "Use this sample photo", value=True, key=f"use_sample_eyelid_{selected_patient}"
         )
-        detections = {}
-        for key in IMAGE_MODALITY_KEYS:
-            img = uploaded_images.get(key)
-            yolo_model = yolo_models.get(key)
-            if img is None or yolo_model is None:
-                continue
-            detections[key] = (img, detect_box(yolo_model, img))
+    else:
+        st.caption("No photo yet.")
 
-        if detections:
-            st.markdown("**Detected region**")
-            row1_cols = st.columns(4, gap="medium")
-            for col, key in zip(row1_cols, IMAGE_MODALITY_KEYS):
-                if key not in detections:
-                    continue
-                img, detection = detections[key]
-                with col:
-                    st.caption(MODALITY_LABELS[key])
-                    if detection is None:
-                        st.image(make_thumbnail(img), use_container_width=True)
-                        st.caption("No detection — raw photo used as-is.")
-                    else:
-                        x1, y1, x2, y2, conf = detection
-                        boxed = draw_box(img, (x1, y1, x2, y2))
-                        st.image(make_thumbnail(boxed), use_container_width=True)
-                        st.caption(f"Confidence {conf:.2f}")
+if manual_eyelid_img is not None:
+    eyelid_image = manual_eyelid_img
+elif use_sample_eyelid and sample_eyelid_path is not None:
+    eyelid_image = open_image_corrected(sample_eyelid_path)
+else:
+    eyelid_image = None
 
-            st.markdown("**Cropped region actually fed to the model**")
-            row2_cols = st.columns(4, gap="medium")
-            for col, key in zip(row2_cols, IMAGE_MODALITY_KEYS):
-                if key not in detections:
-                    continue
-                img, detection = detections[key]
-                with col:
-                    st.caption(MODALITY_LABELS[key])
-                    if detection is None:
-                        st.caption("N/A (raw photo used)")
-                    else:
-                        x1, y1, x2, y2, conf = detection
-                        padded_box = pad_box((x1, y1, x2, y2), img.size)
-                        cropped = crop_to_box(img, padded_box)
-                        st.image(make_thumbnail(cropped), use_container_width=True)
+render_roi_debug_expander({"eyelid": eyelid_image}, yolo_models)
 
 st.divider()
 st.subheader("2. Demographics")
@@ -334,86 +391,104 @@ race_label = d4.selectbox("Race", race_options)
 complexion_label = d5.selectbox("Complexion", complexion_options)
 gender_label = d6.selectbox("Gender", gender_options)
 
-n_uploaded = sum(1 for v in uploaded_images.values() if v is not None)
+demographics = {
+    "age": float(age),
+    "weight_kg": float(weight_kg),
+    "height_cm": float(height_cm),
+    "race_idx": encoding_map["race"]["label_encoding"][race_label],
+    "complexion_idx": encoding_map["complexion"]["label_encoding"][complexion_label],
+    "gender_idx": encoding_map["gender"]["label_encoding"][gender_label],
+}
 
 st.divider()
 st.subheader("3. Predict")
-predict_clicked = st.button("Run prediction", type="primary", disabled=(n_uploaded == 0))
-if n_uploaded == 0:
-    st.info("Upload at least one photo to enable prediction.")
+predict_clicked = st.button("Run prediction", type="primary", disabled=(eyelid_image is None))
+if eyelid_image is None:
+    st.info("Upload (or select a sample) eyelid photo above to enable prediction.")
 
 if predict_clicked:
-    demographics = {
-        "age": float(age),
-        "weight_kg": float(weight_kg),
-        "height_cm": float(height_cm),
-        "race_idx": encoding_map["race"]["label_encoding"][race_label],
-        "complexion_idx": encoding_map["complexion"]["label_encoding"][complexion_label],
-        "gender_idx": encoding_map["gender"]["label_encoding"][gender_label],
-    }
-
     with st.spinner("Running inference..."):
-        batch, presence, display_images = build_batch(
-            uploaded_images, demographics, ckpt, device=device_str, yolo_models=yolo_models
+        result, overlays = run_prediction(
+            {"eyelid": eyelid_image}, demographics, model, ckpt, device_str, yolo_models, use_tta, show_gradcam
         )
-        result = predict(model, batch, presence, ckpt, use_tta=use_tta)
+    st.session_state["eyelid_result"] = {"result": result, "gradcam_overlays": overlays}
+    st.session_state.pop("combined_result", None)
 
-    overlays = {}
-    if show_gradcam:
-        with st.spinner("Computing Grad-CAM..."):
-            overlays = compute_gradcam_overlays(model, batch, presence, display_images, IMAGE_MODALITY_KEYS)
+if "eyelid_result" in st.session_state:
+    eyelid_data = st.session_state["eyelid_result"]
 
-    st.session_state["last_prediction"] = {"result": result, "gradcam_overlays": overlays}
+    st.divider()
+    st.subheader("4. Not fully confident in this result?")
+    st.caption(
+        "Add palm and/or fingertip photos for a more robust, multi-site estimate. The eyelid photo from "
+        "step 1 is reused automatically — no need to re-upload it."
+    )
 
-if "last_prediction" in st.session_state:
-    result = st.session_state["last_prediction"]["result"]
-    overlays = st.session_state["last_prediction"]["gradcam_overlays"]
+    addon_cols = st.columns(2, gap="medium")
+    addon_images = {}
+    for col, key in zip(addon_cols, STAGE2_KEYS):
+        with col, st.container(border=True):
+            st.markdown(f"**{MODALITY_LABELS[key]}**")
+            file = st.file_uploader(
+                f"upload_{key}", type=["jpg", "jpeg", "png"], key=f"upload_{key}", label_visibility="collapsed"
+            )
+            if file is not None:
+                img = open_image_corrected(file)
+                st.image(img, use_container_width=True)
+                addon_images[key] = img
+                continue
 
-    hb = result["hb_pred"]
-    hb_std = result["hb_pred_std"]
+            sample_path = find_patient_modality_path(selected_patient, key) if selected_patient else None
+            if sample_path is not None:
+                st.image(load_patient_thumbnail(sample_path), use_container_width=True)
+                use_sample = st.checkbox(
+                    "Use this sample photo", value=True, key=f"use_sample_{key}_{selected_patient}"
+                )
+                addon_images[key] = open_image_corrected(sample_path) if use_sample else None
+            else:
+                st.caption("No photo yet.")
+                addon_images[key] = None
+
+    render_roi_debug_expander(addon_images, yolo_models)
+
+    n_addon = sum(1 for v in addon_images.values() if v is not None)
+    combined_clicked = st.button(
+        "Run combined prediction", type="primary", disabled=(n_addon == 0), key="combined_predict_btn"
+    )
+    if n_addon == 0:
+        st.caption("Add at least one more photo above to enable a combined prediction.")
+
+    if combined_clicked:
+        images = {"eyelid": eyelid_image, **addon_images}
+        with st.spinner("Running inference..."):
+            result, overlays = run_prediction(
+                images, demographics, model, ckpt, device_str, yolo_models, use_tta, show_gradcam
+            )
+        used_keys = STAGE1_KEYS + [k for k in STAGE2_KEYS if addon_images.get(k) is not None]
+        st.session_state["combined_result"] = {
+            "result": result, "gradcam_overlays": overlays, "modality_keys": used_keys,
+        }
+
+    combined_data = st.session_state.get("combined_result")
 
     st.divider()
     st.markdown("### Result")
-    m1, m2 = st.columns(2, gap="medium")
-    m1.metric("Predicted Hemoglobin", f"{hb:.2f} g/dL", help="Fused via inverse-variance weighting across present modalities.")
-    m2.metric("Approx. 95% interval", f"{hb - 1.96 * hb_std:.2f} – {hb + 1.96 * hb_std:.2f} g/dL")
 
-    # WHO-ish anemia thresholds are gender/age dependent; show a rough flag only.
-    if hb < 11.0:
-        st.error("Predicted Hb is below 11 g/dL — commonly used as a rough anemia threshold. This is a research model, not a diagnosis.")
-    elif hb < 12.5:
-        st.warning("Predicted Hb is in a borderline-low range.")
+    if combined_data:
+        col_a, col_b = st.columns(2, gap="large")
+        with col_a:
+            render_result_card(
+                "Eyelid only", eyelid_data["result"], eyelid_data["gradcam_overlays"], show_gradcam, STAGE1_KEYS
+            )
+        with col_b:
+            combined_label = " + ".join(MODALITY_LABELS[k] for k in combined_data["modality_keys"])
+            render_result_card(
+                f"Combined ({combined_label})", combined_data["result"], combined_data["gradcam_overlays"],
+                show_gradcam, combined_data["modality_keys"],
+            )
     else:
-        st.success("Predicted Hb is in a typical non-anemic range.")
-
-    with st.expander("Per-modality breakdown"):
-        rows = []
-        for key, info in result["per_modality"].items():
-            rows.append({
-                "modality": key,
-                "present": info["present"],
-                "hb_pred (g/dL)": round(info["hb_pred"], 2) if info["present"] else "—",
-                "hb_std (g/dL)": round(info["hb_std"], 2) if info["present"] else "—",
-            })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-        st.caption(
-            "Lower std = the model is more confident in that modality's own estimate; the fused prediction "
-            "weights each present modality by its inverse variance. Modalities marked not present had no photo "
-            "uploaded, so their estimate is excluded from fusion (shown as \"—\" here since it's computed from a "
-            "placeholder blank image, not the photo you uploaded elsewhere)."
+        render_result_card(
+            "Eyelid-only estimate", eyelid_data["result"], eyelid_data["gradcam_overlays"], show_gradcam, STAGE1_KEYS
         )
 
-    if show_gradcam and overlays:
-        st.markdown("### Grad-CAM: where each photo's prediction came from")
-        st.caption(
-            "Warm colors (red/yellow) mark regions of the shared Swin-T backbone's last feature map that most "
-            "increased that modality's own hemoglobin estimate. Computed per-modality (no TTA), not per fused result."
-        )
-        gc_cols = st.columns(4, gap="medium")
-        for gc_col, key in zip(gc_cols, IMAGE_MODALITY_KEYS):
-            with gc_col:
-                if key in overlays:
-                    st.markdown(f"**{MODALITY_LABELS[key]}**")
-                    st.image(overlays[key], use_container_width=True)
-
-    st.caption("This tool is a research prototype trained on a specific dataset. It is not a validated diagnostic device and should not be used for medical decisions.")
+st.caption("This tool is a research prototype trained on a specific dataset. It is not a validated diagnostic device and should not be used for medical decisions.")
