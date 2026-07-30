@@ -425,16 +425,17 @@ if "eyelid_result" in st.session_state:
     eyelid_data = st.session_state["eyelid_result"]
     combined_data = st.session_state.get("combined_result")
 
-    current_hb = combined_data["result"]["hb_pred"] if combined_data else eyelid_data["result"]["hb_pred"]
-    show_recheck_option = current_hb < LOW_HB_RECHECK_THRESHOLD
+    current_result = combined_data["result"] if combined_data else eyelid_data["result"]
+    current_hb_low = current_result["hb_pred"] - 1.96 * current_result["hb_pred_std"]
+    show_recheck_option = current_hb_low < LOW_HB_RECHECK_THRESHOLD
 
     if show_recheck_option:
         st.divider()
         st.subheader("4. Recheck recommended")
         st.caption(
-            f"Predicted Hb is below {LOW_HB_RECHECK_THRESHOLD:.0f} g/dL. Add palm and/or fingertip photos "
-            "for a more robust, multi-site estimate before drawing conclusions. The eyelid photo from step 1 "
-            "is reused automatically — no need to re-upload it."
+            f"The lower end of the approx. 95% interval is below {LOW_HB_RECHECK_THRESHOLD:.0f} g/dL. Add "
+            "palm and/or fingertip photos for a more robust, multi-site estimate before drawing conclusions. "
+            "The eyelid photo from step 1 is reused automatically — no need to re-upload it."
         )
 
         addon_cols = st.columns(2, gap="medium")
