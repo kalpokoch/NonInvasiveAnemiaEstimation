@@ -23,6 +23,7 @@ STAGE2_KEYS = ["palm", "fingertips"]
 
 GRADCAM_DISPLAY_WIDTH = 320
 LOW_HB_RECHECK_THRESHOLD = 10.0
+LAB_TEST_SUGGESTION_THRESHOLD = 9.0
 
 MODALITY_LABELS = {
     "eyelid": "Lower eyelid",
@@ -182,7 +183,12 @@ def render_result_card(title, result, overlays, show_gradcam, modality_keys):
     m2.metric("Approx. 95% interval", f"{hb - 1.96 * hb_std:.2f} – {hb + 1.96 * hb_std:.2f} g/dL")
 
     # WHO-ish anemia thresholds are gender/age dependent; show a rough flag only.
-    if hb < 11.0:
+    if hb < LAB_TEST_SUGGESTION_THRESHOLD:
+        st.error(
+            f"Predicted Hb is below {LAB_TEST_SUGGESTION_THRESHOLD:.0f} g/dL, an abnormal reading. "
+            "This app is a research prototype, not a diagnosis — please get a laboratory blood test to confirm."
+        )
+    elif hb < 11.0:
         st.error("Predicted Hb is below 11 g/dL — commonly used as a rough anemia threshold. This is a research model, not a diagnosis.")
     elif hb < 12.5:
         st.warning("Predicted Hb is in a borderline-low range.")
