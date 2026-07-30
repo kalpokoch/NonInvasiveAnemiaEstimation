@@ -21,6 +21,8 @@ USE_TTA = False
 STAGE1_KEYS = ["eyelid"]
 STAGE2_KEYS = ["palm", "fingertips"]
 
+GRADCAM_DISPLAY_WIDTH = 320
+
 MODALITY_LABELS = {
     "eyelid": "Lower eyelid",
     "palm": "Palm",
@@ -214,7 +216,11 @@ def render_result_card(title, result, overlays, show_gradcam, modality_keys):
         for gc_col, key in zip(gc_cols, present_overlay_keys):
             with gc_col:
                 st.markdown(f"**{MODALITY_LABELS[key]}**")
-                st.image(overlays[key], use_container_width=True)
+                # Fixed pixel width (not use_container_width) so a lone image
+                # in a single-column layout doesn't blow up to the full page
+                # width -- every Grad-CAM image renders at the same size
+                # regardless of how many modalities are shown alongside it.
+                st.image(overlays[key], width=GRADCAM_DISPLAY_WIDTH)
 
 
 def render_roi_debug_expander(images_subset, yolo_models):
