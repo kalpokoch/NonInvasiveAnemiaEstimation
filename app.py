@@ -22,6 +22,7 @@ STAGE1_KEYS = ["eyelid"]
 STAGE2_KEYS = ["palm", "fingertips"]
 
 GRADCAM_DISPLAY_WIDTH = 320
+LOW_HB_RECHECK_THRESHOLD = 10.0
 
 MODALITY_LABELS = {
     "eyelid": "Lower eyelid",
@@ -422,60 +423,65 @@ if predict_clicked:
 
 if "eyelid_result" in st.session_state:
     eyelid_data = st.session_state["eyelid_result"]
-
-    st.divider()
-    st.subheader("4. Not fully confident in this result?")
-    st.caption(
-        "Add palm and/or fingertip photos for a more robust, multi-site estimate. The eyelid photo from "
-        "step 1 is reused automatically — no need to re-upload it."
-    )
-
-    addon_cols = st.columns(2, gap="medium")
-    addon_images = {}
-    for col, key in zip(addon_cols, STAGE2_KEYS):
-        with col, st.container(border=True):
-            st.markdown(f"**{MODALITY_LABELS[key]}**")
-            file = st.file_uploader(
-                f"upload_{key}", type=["jpg", "jpeg", "png"], key=f"upload_{key}", label_visibility="collapsed"
-            )
-            if file is not None:
-                img = open_image_corrected(file)
-                st.image(img, use_container_width=True)
-                addon_images[key] = img
-                continue
-
-            sample_path = find_patient_modality_path(selected_patient, key) if selected_patient else None
-            if sample_path is not None:
-                st.image(load_patient_thumbnail(sample_path), use_container_width=True)
-                use_sample = st.checkbox(
-                    "Use this sample photo", value=True, key=f"use_sample_{key}_{selected_patient}"
-                )
-                addon_images[key] = open_image_corrected(sample_path) if use_sample else None
-            else:
-                st.caption("No photo yet.")
-                addon_images[key] = None
-
-    render_roi_debug_expander(addon_images, yolo_models)
-
-    n_addon = sum(1 for v in addon_images.values() if v is not None)
-    combined_clicked = st.button(
-        "Run combined prediction", type="primary", disabled=(n_addon == 0), key="combined_predict_btn"
-    )
-    if n_addon == 0:
-        st.caption("Add at least one more photo above to enable a combined prediction.")
-
-    if combined_clicked:
-        images = {"eyelid": eyelid_image, **addon_images}
-        with st.spinner("Running inference..."):
-            result, overlays = run_prediction(
-                images, demographics, model, ckpt, device_str, yolo_models, use_tta, show_gradcam
-            )
-        used_keys = STAGE1_KEYS + [k for k in STAGE2_KEYS if addon_images.get(k) is not None]
-        st.session_state["combined_result"] = {
-            "result": result, "gradcam_overlays": overlays, "modality_keys": used_keys,
-        }
-
     combined_data = st.session_state.get("combined_result")
+
+    current_hb = combined_data["result"]["hb_pred"] if combined_data else eyelid_data["result"]["hb_pred"]
+    show_recheck_option = current_hb < LOW_HB_RECHECK_THRESHOLD
+
+    if show_recheck_option:
+        st.divider()
+        st.subheader("4. Recheck recommended")
+        st.caption(
+            f"Predicted Hb is below {LOW_HB_RECHECK_THRESHOLD:.0f} g/dL. Add palm and/or fingertip photos "
+            "for a more robust, multi-site estimate before drawing conclusions. The eyelid photo from step 1 "
+            "is reused automatically — no need to re-upload it."
+        )
+
+        addon_cols = st.columns(2, gap="medium")
+        addon_images = {}
+        for col, key in zip(addon_cols, STAGE2_KEYS):
+            with col, st.container(border=True):
+                st.markdown(f"**{MODALITY_LABELS[key]}**")
+                file = st.file_uploader(
+                    f"upload_{key}", type=["jpg", "jpeg", "png"], key=f"upload_{key}", label_visibility="collapsed"
+                )
+                if file is not None:
+                    img = open_image_corrected(file)
+                    st.image(img, use_container_width=True)
+                    addon_images[key] = img
+                    continue
+
+                sample_path = find_patient_modality_path(selected_patient, key) if selected_patient else None
+                if sample_path is not None:
+                    st.image(load_patient_thumbnail(sample_path), use_container_width=True)
+                    use_sample = st.checkbox(
+                        "Use this sample photo", value=True, key=f"use_sample_{key}_{selected_patient}"
+                    )
+                    addon_images[key] = open_image_corrected(sample_path) if use_sample else None
+                else:
+                    st.caption("No photo yet.")
+                    addon_images[key] = None
+
+        render_roi_debug_expander(addon_images, yolo_models)
+
+        n_addon = sum(1 for v in addon_images.values() if v is not None)
+        combined_clicked = st.button(
+            "Run combined prediction", type="primary", disabled=(n_addon == 0), key="combined_predict_btn"
+        )
+        if n_addon == 0:
+            st.caption("Add at least one more photo above to enable a combined prediction.")
+
+        if combined_clicked:
+            images = {"eyelid": eyelid_image, **addon_images}
+            with st.spinner("Running inference..."):
+                result, overlays = run_prediction(
+                    images, demographics, model, ckpt, device_str, yolo_models, use_tta, show_gradcam
+                )
+            used_keys = STAGE1_KEYS + [k for k in STAGE2_KEYS if addon_images.get(k) is not None]
+            st.session_state["combined_result"] = {
+                "result": result, "gradcam_overlays": overlays, "modality_keys": used_keys,
+            }
+            combined_data = st.session_state["combined_result"]
 
     st.divider()
     st.markdown("### Result")
