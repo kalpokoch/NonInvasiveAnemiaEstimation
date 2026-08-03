@@ -331,8 +331,12 @@ with st.sidebar:
 
     st.divider()
     show_gradcam = st.checkbox(
-        "Show Grad-CAM", value=True,
-        help="Highlights which regions of each uploaded photo most influenced that modality's own prediction.",
+        "Show Grad-CAM", value=False,
+        help=(
+            "Highlights which regions of each uploaded photo most influenced that modality's own prediction. "
+            "Off by default: computing it needs a backward pass that roughly doubles peak memory use, which "
+            "matters on memory-constrained deployments."
+        ),
     )
 
 model, ckpt = get_model(checkpoint_path, device_str)
