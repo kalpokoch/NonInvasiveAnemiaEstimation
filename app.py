@@ -21,7 +21,7 @@ USE_TTA = False
 STAGE1_KEYS = ["eyelid"]
 STAGE2_KEYS = ["palm", "fingertips"]
 
-GRADCAM_DISPLAY_WIDTH = 320
+AUX_IMAGE_DISPLAY_WIDTH = 320
 LOW_HB_RECHECK_THRESHOLD = 10.0
 LAB_TEST_SUGGESTION_THRESHOLD = 9.0
 
@@ -228,7 +228,7 @@ def render_result_card(title, result, overlays, show_gradcam, modality_keys):
                 # in a single-column layout doesn't blow up to the full page
                 # width -- every Grad-CAM image renders at the same size
                 # regardless of how many modalities are shown alongside it.
-                st.image(overlays[key], width=GRADCAM_DISPLAY_WIDTH)
+                st.image(overlays[key], width=AUX_IMAGE_DISPLAY_WIDTH)
 
 
 def render_roi_debug_expander(images_subset, yolo_models):
@@ -257,12 +257,12 @@ def render_roi_debug_expander(images_subset, yolo_models):
             with col:
                 st.caption(MODALITY_LABELS[key])
                 if detection is None:
-                    st.image(make_thumbnail(img), use_container_width=True)
+                    st.image(make_thumbnail(img), width=AUX_IMAGE_DISPLAY_WIDTH)
                     st.caption("No detection — raw photo used as-is.")
                 else:
                     x1, y1, x2, y2, conf = detection
                     boxed = draw_box(img, (x1, y1, x2, y2))
-                    st.image(make_thumbnail(boxed), use_container_width=True)
+                    st.image(make_thumbnail(boxed), width=AUX_IMAGE_DISPLAY_WIDTH)
                     st.caption(f"Confidence {conf:.2f}")
 
         st.markdown("**Cropped region actually fed to the model**")
@@ -276,7 +276,7 @@ def render_roi_debug_expander(images_subset, yolo_models):
                     x1, y1, x2, y2, conf = detection
                     padded_box = pad_box((x1, y1, x2, y2), img.size)
                     cropped = crop_to_box(img, padded_box)
-                    st.image(make_thumbnail(cropped), use_container_width=True)
+                    st.image(make_thumbnail(cropped), width=AUX_IMAGE_DISPLAY_WIDTH)
 
 
 @st.cache_resource(show_spinner="Loading model checkpoint...")
